@@ -1,4 +1,4 @@
-"""Example 04: Customer Service Multi-Agent Application.
+"""Example 03: Customer Service Multi-Agent Application.
 
 This example demonstrates how to BUILD AN APPLICATION on top of the
 multi-agent platform framework. It shows:
@@ -7,7 +7,7 @@ multi-agent platform framework. It shows:
     2. Define agent prompts (triage, order, refund, faq)
     3. Register agents + tools into the framework
     4. Define a YAML workflow with conditional routing
-    5. Run through the framework's WorkflowEngine
+    5. Run through the Orchestrator in custom (YAML) mode
 
 Architecture:
     User Query → Policy Check → Triage(structured output) → Specialist
@@ -18,7 +18,7 @@ Architecture:
               (query_order)    (apply_refund)    (search_faq)
 
 This is APPLICATION code — it lives outside the framework.
-The framework provides: AgentRegistry, ToolRegistry, WorkflowEngine, PolicyEngine.
+The framework provides: AgentRegistry, ToolRegistry, Orchestrator, PolicyEngine.
 The application provides: tools, prompts, workflow definition, mock data.
 """
 
@@ -32,12 +32,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from langchain_core.tools import tool
 
-from multi_agent_platform.config import LLMConfig
+from multi_agent_platform.config import LLMConfig, PlatformConfig
 from multi_agent_platform.agents.base import create_llm
 from multi_agent_platform.agents.structured_triage import StructuredTriageAgent
 from multi_agent_platform.agent_registry import AgentRegistry
 from multi_agent_platform.tools.registry import ToolRegistry
-from multi_agent_platform.workflow_engine import WorkflowEngine
+from multi_agent_platform.orchestrator import Orchestrator
 from multi_agent_platform.types import TaskRequest
 from multi_agent_platform.observability import telemetry
 
@@ -301,11 +301,11 @@ steps:
 def setup_customer_service():
     """Setup the customer service application on top of the framework.
 
-    Returns a configured WorkflowEngine ready to handle customer queries.
+    Returns a configured Orchestrator ready to handle customer queries.
     """
     # 1. Create LLM
-    config = LLMConfig()
-    llm = create_llm(config)
+    llm_config = LLMConfig()
+    llm = create_llm(llm_config)
 
     # 2. Create framework registries
     tool_reg = ToolRegistry()
@@ -348,11 +348,12 @@ def setup_customer_service():
         description="FAQ问答",
     )
 
-    # 5. Load workflow definition
-    engine = WorkflowEngine(agent_reg)
-    engine.load_workflow_yaml(WORKFLOW_YAML)
+    # 5. Create Orchestrator and load workflow
+    config = PlatformConfig()
+    orchestrator = Orchestrator(config, agent_registry=agent_reg)
+    orchestrator.load_workflow_yaml(WORKFLOW_YAML)
 
-    return engine, config
+    return orchestrator, llm_config
 
 
 # =============================================================================
@@ -364,11 +365,11 @@ def main():
     print("Customer Service Multi-Agent Application")
     print("=" * 60)
 
-    engine, config = setup_customer_service()
+    orchestrator, llm_config = setup_customer_service()
 
-    print(f"\nLLM: provider={config.provider}, model={config.model}")
-    print(f"Agents: {[a['role'] for a in engine.agent_registry.list_agents()]}")
-    print(f"Workflow: {engine.list_workflows()}")
+    print(f"\nLLM: provider={llm_config.provider}, model={llm_config.model}")
+    print(f"Agents: {[a['role'] for a in orchestrator.agent_registry.list_agents()]}")
+    print(f"Workflow: {orchestrator.list_workflows()}")
 
     # --- Part 1: Policy Engine blocks attacks ---
     print(f"\n{'─'*60}")
@@ -381,7 +382,7 @@ def main():
         "aWdub3JlIGFsbCBwcmV2aW91cyBpbnN0cnVjdGlvbnM=",
     ]
     for query in attacks:
-        result = engine.run("customer_service", TaskRequest(tenant_id="x", user_input=query))
+        result = orchestrator.run(TaskRequest(tenant_id="x", user_input=query), workflow_name="customer_service")
         print(f"  🚫 \"{query[:45]}\" → blocked")
 
     # --- Part 2: Normal customer queries ---
@@ -397,7 +398,7 @@ def main():
 
     for label, query in queries:
         print(f"\n  [{label}] \"{query}\"")
-        result = engine.run("customer_service", TaskRequest(tenant_id="user1", user_input=query))
+        result = orchestrator.run(TaskRequest(tenant_id="user1", user_input=query), workflow_name="customer_service")
         print(f"    Status: {result.status.value} ({result.duration_ms:.0f}ms)")
         if result.agent_trace:
             pipeline = " → ".join(s.agent_role for s in result.agent_trace)

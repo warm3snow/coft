@@ -1,8 +1,8 @@
-"""Example 02: Multi-agent workflow - Planner -> Coder -> Reviewer.
+"""Example 02: Multi-agent workflow - ReAct autonomous execution.
 
 Demonstrates:
-    - Full pipeline: plan decomposition, code generation, code review
-    - Agent collaboration through Orchestrator
+    - Orchestrator default mode: LLM autonomously decides each step
+    - Tool usage: file operations, code execution
     - Observability (trace, metrics)
 """
 

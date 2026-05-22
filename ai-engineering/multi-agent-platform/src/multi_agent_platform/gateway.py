@@ -31,6 +31,7 @@ class ChatRequest(BaseModel):
     message: str
     tenant_id: str = "default"
     context: dict[str, Any] = {}
+    workflow: str | None = None  # If set, use YAML workflow mode
 
 
 class ChatResponse(BaseModel):
@@ -106,7 +107,7 @@ def create_app(config: PlatformConfig | None = None) -> FastAPI:
         )
 
         # Execute through orchestrator
-        result: TaskResult = orchestrator.run(task_request)
+        result: TaskResult = orchestrator.run(task_request, workflow_name=request.workflow)
 
         return ChatResponse(
             task_id=result.task_id,
