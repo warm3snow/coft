@@ -78,7 +78,7 @@ class PlannerAgent(BaseAgent):
             agent_role=self.role,
             action="plan",
             input_summary=task[:200],
-            output_summary=content[:500],
+            output_summary=content,
             tokens_used=getattr(response, "usage_metadata", {}).get("total_tokens", 0)
             if hasattr(response, "usage_metadata") and response.usage_metadata
             else 0,

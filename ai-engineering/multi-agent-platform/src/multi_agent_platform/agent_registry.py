@@ -12,6 +12,7 @@ Usage:
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Callable, Type
 
 from langchain_core.language_models import BaseChatModel
@@ -142,6 +143,22 @@ class AgentRegistry:
         self._instances.pop(role, None)
         telemetry.log("agent_registry.registered", role=role, description=description)
 
+    def register_instance(self, role: str, agent: BaseAgent, description: str = "") -> None:
+        """Register a pre-built agent instance.
+
+        Useful for agents that require custom constructor arguments or setup,
+        such as structured-output agents with schema-specific initialization.
+        """
+        self._registrations[role] = AgentRegistration(
+            role=role,
+            system_prompt=getattr(agent, "system_prompt", ""),
+            tool_names=[tool.name for tool in getattr(agent, "tools", [])] or None,
+            agent_class=agent.__class__,
+            description=description,
+        )
+        self._instances[role] = agent
+        telemetry.log("agent_registry.instance_registered", role=role, description=description)
+
     def get(self, role: str) -> BaseAgent:
         """Get or create an agent instance by role name."""
         if role in self._instances:
@@ -156,7 +173,7 @@ class AgentRegistry:
 
         # Instantiate
         if reg.agent_class:
-            agent = reg.agent_class(llm=self._llm, tools=tools)
+            agent = self._instantiate_agent(reg, tools)
         else:
             agent = GenericAgent(
                 role=role,
@@ -167,6 +184,16 @@ class AgentRegistry:
 
         self._instances[role] = agent
         return agent
+
+    def _instantiate_agent(self, reg: AgentRegistration, tools: list[BaseTool]) -> BaseAgent:
+        """Instantiate a registered agent class with optional prompt injection."""
+        assert reg.agent_class is not None
+
+        kwargs: dict[str, Any] = {"llm": self._llm, "tools": tools}
+        params = inspect.signature(reg.agent_class.__init__).parameters
+        if "system_prompt" in params:
+            kwargs["system_prompt"] = reg.system_prompt
+        return reg.agent_class(**kwargs)
 
     def _resolve_tools(self, tool_names: list[str] | None) -> list[BaseTool]:
         """Resolve tool names to tool instances."""

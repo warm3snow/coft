@@ -164,6 +164,13 @@ class BaseAgent(ABC):
                 duration_ms=duration_ms,
             )
 
+    @staticmethod
+    def _extract_total_tokens(response: Any) -> int:
+        """Extract total token usage from an LLM response when available."""
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            return response.usage_metadata.get("total_tokens", 0) or 0
+        return 0
+
     def _call_llm(self, messages: list[Any], use_tools: bool = True) -> Any:
         """Call the LLM with messages and exponential backoff retry.
 

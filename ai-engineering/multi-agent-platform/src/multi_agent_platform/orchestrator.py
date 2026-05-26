@@ -1,10 +1,10 @@
-"""Orchestrator - Dual-mode multi-agent coordination engine.
+"""Orchestrator - framework-level coordination engine.
 
-Two execution modes:
-    1. Default (ReAct): GenericAgent loop with all tools.
-       LLM dynamically decides each action until task is complete.
-    2. Custom (YAML Workflow): Conditional routing defined in YAML.
-       Triage → specialist branching patterns.
+Execution modes:
+    1. Default adaptive mode: chooses between a capability pipeline and ReAct.
+       - Capability pipeline: planner -> specialists when the registry supports it.
+       - ReAct fallback: a generic executor with shared tools.
+    2. Custom workflow mode: YAML-defined conditional routing for app-specific flows.
 
 Architecture:
     User → Gateway → Orchestrator → Agent Pool
@@ -32,6 +32,7 @@ from .config import PlatformConfig
 from .memory import MemoryManager
 from .observability import telemetry
 from .policy_engine import PolicyEngine
+from .tools.file_tools import set_workspace
 from .tools.registry import ToolRegistry
 from .tools.file_tools import read_file, write_file, list_directory
 from .tools.execution_tools import execute_python
@@ -63,10 +64,14 @@ Think carefully before each action. Observe results and adjust your approach."""
 
 
 class Orchestrator:
-    """Dual-mode multi-agent orchestrator.
+    """Framework-level multi-agent orchestrator.
 
-    Default mode (no workflow): GenericAgent ReAct loop with all registered tools.
-    Custom mode (with workflow): YAML-defined conditional routing.
+    Default mode (no workflow) is adaptive rather than hardcoded to a single flow:
+    - If the registry exposes planner plus specialist roles, Orchestrator can run
+      a capability-driven pipeline.
+    - Otherwise, it falls back to a generic ReAct executor over the shared toolset.
+
+    Custom mode (with workflow) runs application-defined YAML routing.
 
     Usage:
         # Default mode - autonomous ReAct
@@ -88,6 +93,7 @@ class Orchestrator:
         self.policy = PolicyEngine(self.config.policy)
         self.memory = MemoryManager(self.config.memory)
         self.tool_registry = ToolRegistry()
+        set_workspace(self.config.workspace_dir)
 
         # Initialize LLM
         self._llm = create_llm(self.config.llm)
@@ -114,7 +120,7 @@ class Orchestrator:
         self.tool_registry.register(execute_python, roles=["coder", "orchestrator"])
 
     def _create_default_registry(self) -> AgentRegistry:
-        """Create registry pre-loaded with built-in agents."""
+        """Create registry pre-loaded with built-in reusable agent capabilities."""
         registry = AgentRegistry(self._llm, self.tool_registry)
         registry.register(
             "planner",
@@ -168,21 +174,22 @@ class Orchestrator:
         Returns:
             TaskResult with status, output, agent trace, and metrics.
         """
-        telemetry.metrics.total_requests += 1
         start = time.time()
+        baseline_tokens = telemetry.metrics.total_tokens
 
         # Policy check (fail-closed, synchronous)
         with telemetry.span("orchestrator.policy_check", trace_id=request.id):
             policy_result = self.policy.check_input(request.user_input, request.tenant_id)
             if policy_result.verdict == PolicyVerdict.DENY:
                 duration_ms = (time.time() - start) * 1000
-                return TaskResult(
+                result = TaskResult(
                     task_id=request.id,
                     status=TaskStatus.FAILED,
                     output="",
                     duration_ms=duration_ms,
                     error=f"Policy denied: {policy_result.reason}",
                 )
+                return self._finalize_result(request, result, start, baseline_tokens)
 
         # Store user message in memory
         self.memory.add_message(
@@ -196,16 +203,31 @@ class Orchestrator:
         else:
             result = self._run_default(request, start)
 
-        return result
+        return self._finalize_result(request, result, start, baseline_tokens)
 
-    # --- Default Mode: ReAct Loop ---
+    # --- Default Mode: Adaptive Execution ---
 
     def _run_default(self, request: TaskRequest, start: float) -> TaskResult:
-        """Execute using GenericAgent ReAct loop.
+        """Execute using the default adaptive strategy.
 
-        The agent has access to all registered tools and autonomously decides
-        each action step until the task is complete or max iterations reached.
+        The framework first checks whether the registered agent set can support
+        a planner-led capability pipeline for the current request. If not, it
+        falls back to a generic ReAct executor over shared tools.
         """
+        if self._should_use_capability_pipeline(request):
+            try:
+                pipeline_result = self._run_default_capability_pipeline(request)
+                if pipeline_result is not None:
+                    return pipeline_result
+            except Exception as e:
+                return TaskResult(
+                    task_id=request.id,
+                    status=TaskStatus.FAILED,
+                    output="",
+                    duration_ms=(time.time() - start) * 1000,
+                    error=f"Capability pipeline failed: {e}",
+                )
+
         max_iterations = 10
         timeout_seconds = self.config.orchestrator_timeout_seconds
 
@@ -213,6 +235,7 @@ class Orchestrator:
             try:
                 # Get all tools for orchestrator role
                 all_tools = self.tool_registry.get_tools_for_role("orchestrator")
+                self._enforce_tool_access(request.tenant_id, all_tools)
 
                 # Create orchestrator agent with all tools
                 agent = GenericAgent(
@@ -284,6 +307,7 @@ class Orchestrator:
                     else:
                         # No tool calls → final answer
                         final_output = response.content if hasattr(response, "content") else ""
+                        self._enforce_output_policy(final_output)
                         agent_trace.append(AgentStep(
                             agent_role="orchestrator",
                             action="final_answer",
@@ -311,16 +335,67 @@ class Orchestrator:
                     error=f"Orchestrator error: {e}",
                 )
 
-        duration_ms = (time.time() - start) * 1000
-        self.memory.clear_task(request.id)
-
         return TaskResult(
             task_id=request.id,
             status=TaskStatus.COMPLETED,
             output=final_output,
             agent_trace=agent_trace,
-            total_tokens=telemetry.metrics.total_tokens,
-            duration_ms=duration_ms,
+            duration_ms=(time.time() - start) * 1000,
+        )
+
+    def _run_default_capability_pipeline(self, request: TaskRequest) -> TaskResult | None:
+        """Run planner-led specialist execution when the registry supports it."""
+        if not self._agent_registry.has("planner"):
+            return None
+
+        context = self.memory.get_context(request.id)
+        try:
+            plan_step = self._execute_agent_with_policy(request, "planner", request.user_input, context)
+        except Exception:
+            return None
+
+        agent_trace: list[AgentStep] = [plan_step]
+
+        plan_data = self._extract_plan_from_step(plan_step)
+        if not plan_data or not plan_data.get("steps"):
+            return None
+
+        output_parts: list[str] = []
+        last_output = ""
+
+        for planned_step in plan_data["steps"]:
+            agent_name = str(planned_step.get("agent", "coder"))
+            if not self._agent_registry.has(agent_name):
+                return None
+
+            step_input = str(planned_step.get("input") or request.user_input)
+            if last_output:
+                step_input = f"{step_input}\n\nPrevious step output:\n{last_output}"
+
+            step_result = self._execute_agent_with_policy(
+                request,
+                agent_name,
+                step_input,
+                self.memory.get_context(request.id),
+            )
+            agent_trace.append(step_result)
+            output_parts.append(f"[{agent_name}] {step_result.output_summary}")
+            last_output = step_result.output_summary
+
+            self.memory.add_message(
+                request.id,
+                Message(role="assistant", content=step_result.output_summary, metadata={"step": agent_name}),
+            )
+
+        final_output = last_output or "\n".join(output_parts)
+        if output_parts and final_output != "\n".join(output_parts):
+            output_parts.append(f"[final] {final_output}")
+
+        return TaskResult(
+            task_id=request.id,
+            status=TaskStatus.COMPLETED,
+            output="\n".join(output_parts) if output_parts else final_output,
+            agent_trace=agent_trace,
         )
 
     # --- Custom Mode: YAML Workflow ---
@@ -381,7 +456,12 @@ class Orchestrator:
 
                 context = self.memory.get_context(request.id)
                 try:
-                    step_result = agent.invoke(request.user_input, context)
+                    step_result = self._execute_agent_with_policy(
+                        request,
+                        step.agent,
+                        request.user_input,
+                        context,
+                    )
                 except Exception as e:
                     agent_trace.append(AgentStep(
                         agent_role=step.agent,
@@ -391,7 +471,6 @@ class Orchestrator:
                     ))
                     output_parts.append(f"[{step.name}] Error: {e}")
                     duration_ms = (time.time() - start) * 1000
-                    self.memory.clear_task(request.id)
                     return TaskResult(
                         task_id=request.id,
                         status=TaskStatus.FAILED,
@@ -439,16 +518,94 @@ class Orchestrator:
                     break
                 current_step_name = next_step
 
-        duration_ms = (time.time() - start) * 1000
-        self.memory.clear_task(request.id)
-
         return TaskResult(
             task_id=request.id,
             status=TaskStatus.COMPLETED,
             output="\n".join(output_parts),
             agent_trace=agent_trace,
-            duration_ms=duration_ms,
+            duration_ms=(time.time() - start) * 1000,
         )
+
+    @staticmethod
+    def _extract_plan_from_step(step: AgentStep) -> dict[str, Any] | None:
+        """Extract structured plan JSON from a planner step."""
+        output = step.output_summary or ""
+        start_idx = output.find("{")
+        end_idx = output.rfind("}") + 1
+        if start_idx < 0 or end_idx <= start_idx:
+            return None
+
+        import json as _json
+
+        try:
+            return _json.loads(output[start_idx:end_idx])
+        except (ValueError, _json.JSONDecodeError):
+            return None
+
+    def _should_use_capability_pipeline(self, request: TaskRequest) -> bool:
+        """Decide whether the default path should use planner-led delegation."""
+        if not all(self._agent_registry.has(role) for role in ("planner", "coder", "reviewer")):
+            return False
+
+        text = request.user_input.lower()
+        keywords = (
+            "write",
+            "implement",
+            "create",
+            "modify",
+            "refactor",
+            "test",
+            "code",
+            "python",
+            "module",
+            "function",
+        )
+        return any(keyword in text for keyword in keywords)
+
+    def _execute_agent_with_policy(
+        self,
+        request: TaskRequest,
+        agent_name: str,
+        task_input: str,
+        context: list[Message] | None = None,
+    ) -> AgentStep:
+        """Run a registered agent with per-tool and output policy checks."""
+        agent = self._agent_registry.get(agent_name)
+        self._enforce_tool_access(request.tenant_id, agent.tools)
+        step_result = agent.invoke(task_input, context)
+        self._enforce_output_policy(step_result.output_summary)
+        return step_result
+
+    def _enforce_tool_access(self, tenant_id: str, tools: list[Any]) -> None:
+        """Fail closed if tenant is not allowed to use a tool."""
+        for tool in tools:
+            verdict = self.policy.check_tool_access(tenant_id, tool.name)
+            if verdict.verdict == PolicyVerdict.DENY:
+                raise PermissionError(verdict.reason)
+
+    def _enforce_output_policy(self, output: str) -> None:
+        """Fail closed if agent output violates output policy."""
+        verdict = self.policy.check_output(output)
+        if verdict.verdict == PolicyVerdict.DENY:
+            raise ValueError(verdict.reason)
+
+    def _finalize_result(
+        self,
+        request: TaskRequest,
+        result: TaskResult,
+        start: float,
+        baseline_tokens: int,
+    ) -> TaskResult:
+        """Apply consistent request-level accounting and cleanup."""
+        final_duration = result.duration_ms or ((time.time() - start) * 1000)
+        request_tokens = max(0, telemetry.metrics.total_tokens - baseline_tokens)
+        telemetry.metrics.record_request(
+            tenant_id=request.tenant_id,
+            status=result.status.value,
+            duration_ms=final_duration,
+        )
+        self.memory.clear_task(request.id)
+        return result.model_copy(update={"duration_ms": final_duration, "total_tokens": request_tokens})
 
     # --- Workflow Routing Helpers ---
 

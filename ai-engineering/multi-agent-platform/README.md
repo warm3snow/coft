@@ -5,37 +5,50 @@
 ## 架构
 
 ```
-                                   ┌──────────────────────┐
-                                   │   Observability      │
-                                   │  (trace/metrics/log) │
-                                   └──────────┬───────────┘
-                                              │
-   User ──▶ Gateway ──▶ Orchestrator ────▶ Agent Pool
-                            │                 │
-                            │          ┌──────┼──────┐
-            ┌───────────────┤          ▼      ▼      ▼
-            ▼               ▼       Agent A  Agent B  Agent C
-      Policy Engine    Memory/RAG   (triage) (coder)  (custom)
-      (fail-closed)   (short+long)        │
-                                          ▼
-                                     Tool Layer
-                                    (DB/API/sandbox)
+                                  ┌──────────────────────┐
+                                  │   Observability      │
+                                  │  (trace/metrics/log) │
+                                  └──────────┬───────────┘
+                                             │
+User / App ──▶ Gateway / SDK ──▶ Orchestrator ──▶ Agent Registry
+                               │        │               │
+                               │        │         ┌─────┼──────────────┐
+                  ┌────────────┴───┐    │         ▼     ▼              ▼
+                  ▼                ▼    ▼    Planner  Specialist   Custom Agent
+             Policy Engine     Memory/RAG  (optional) Agents       Instances
+             (fail-closed)    (short+long)             │
+                                                        ▼
+                                                   Tool Registry
+                                              (DB/API/RAG/Sandbox)
 ```
 
-Orchestrator 支持两种编排模式：
+这个仓库的定位是企业 Agent 框架，不是单一场景 Agent 产品。也就是说：
+
+- 框架层负责注册、编排、安全、记忆、观测这些通用机制。
+- 应用层按业务场景扩展 agents、tools、workflow。
+- 默认能力应该尽量通用，不能把代码生成场景固化成平台唯一主路径。
+
+Orchestrator 支持两类执行模式：
 
 | 模式 | 触发条件 | 行为 |
 |------|---------|------|
-| **默认（ReAct）** | `run(request)` | GenericAgent 自主循环：思考→行动→观察→判断 |
-| **自定义（YAML）** | `run(request, workflow_name="...")` | 按 YAML 定义的条件路由执行 |
+| **默认自适应模式** | `run(request)` | 优先使用 registry 中可用能力组成默认执行路径；无法形成能力流水线时回退到通用 ReAct |
+| **自定义 Workflow 模式** | `run(request, workflow_name="...")` | 按 YAML 定义的场景化路由执行 |
+
+默认自适应模式的设计目标接近 OpenClaw 的“能力驱动执行”思路，但做了企业框架化约束：
+
+- 不把单一产品形态写死在平台里。
+- 不要求所有任务都必须多 agent。
+- 优先依据已注册能力选择执行路径，而不是依据固定场景名。
+- 具体行业流程仍通过应用侧 agents 和 workflow 注入。
 
 框架提供**机制**，应用提供**策略**：
 
 | 框架（src/） | 应用（examples/） |
 |--------------|-------------------|
-| AgentRegistry -- 注册任意 Agent | 定义 Agent prompts |
+| AgentRegistry -- 注册任意 Agent / 预构建 Agent 实例 | 定义 domain agents / prompts / agent setup |
 | ToolRegistry -- 注册任意 Tool | 定义 domain tools |
-| Orchestrator -- 双模式编排（ReAct + YAML workflow） | 定义 workflow YAML |
+| Orchestrator -- 默认自适应编排 + YAML workflow | 定义 workflow YAML |
 | PolicyEngine -- 安全围栏 | - |
 | Observability -- trace/metrics/log | - |
 | Memory -- 短期 + RAG | - |
@@ -59,10 +72,10 @@ export LLM_BASE_URL="http://localhost:11434/v1" # API 端点
 运行示例：
 
 ```bash
-# 默认 ReAct 模式：LLM 自主决定每步行动
+# 默认自适应模式：优先走已注册能力，必要时回退到 ReAct
 python examples/01_basic_example.py
 
-# 复杂任务：Orchestrator 自主完成代码编写
+# 复杂任务：Orchestrator 使用默认能力组合完成任务
 python examples/02_multi_agent_workflow.py
 
 # 自定义 Workflow 模式：Triage → Order/Refund/FAQ（展示如何构建应用）
@@ -109,7 +122,7 @@ steps:
 result = orchestrator.run(TaskRequest(tenant_id="x", user_input="..."), workflow_name="my_app")
 ```
 
-或直接使用默认 ReAct 模式（无需 YAML）：
+或直接使用默认自适应模式（无需 YAML）：
 
 ```python
 orchestrator = Orchestrator()
@@ -122,8 +135,8 @@ result = orchestrator.run(TaskRequest(tenant_id="x", user_input="帮我写一个
 src/multi_agent_platform/          # 框架层
 ├── config.py                      # 统一配置（LLM_PROVIDER/MODEL/API_KEY/BASE_URL）
 ├── types.py                       # 类型定义
-├── agent_registry.py              # Agent 动态注册 + GenericAgent（ReAct）
-├── orchestrator.py                # 双模式编排器（ReAct 默认 + YAML workflow）
+├── agent_registry.py              # Agent 动态注册 + 预构建实例注入 + GenericAgent
+├── orchestrator.py                # 双模式编排器（默认自适应 + YAML workflow）
 ├── workflow_engine.py             # Workflow 数据定义（WorkflowStep/Definition）
 ├── policy_engine.py               # 安全围栏（正则 + 反绕过 + fail-closed）
 ├── memory.py                      # 短期记忆 + FAISS RAG
@@ -152,7 +165,7 @@ examples/                          # 应用层（展示如何使用框架）
 1. **框架 vs 应用分离** -- 框架提供注册/编排/安全/观测，应用定义 agents/tools/workflow
 2. **单 Agent 优先** -- 能用 single agent + tools 解决的不上多 Agent
 3. **Agent 不直接互调** -- 所有协作经过 Orchestrator
-4. **默认 ReAct 自主执行** -- LLM 动态决策每步行动，无固定 pipeline
+4. **默认路径能力驱动** -- 先看 registry 中有哪些能力，再决定是否走 pipeline 或 ReAct
 5. **Policy Engine fail-closed** -- 安全检查同步阻塞，出错即拒绝
 6. **Structured Output 路由** -- Triage 用 Pydantic schema 约束，路由零歧义
 
@@ -160,10 +173,10 @@ examples/                          # 应用层（展示如何使用框架）
 
 | 决策点 | 当前实现 | 后续演进方向 |
 |--------|----------|-------------|
-| 编排模式 | 双模式：ReAct 默认 + YAML 自定义 | + 层级编排 |
+| 编排模式 | 双模式：默认自适应 + YAML 自定义 | + 层级编排 + 动态能力发现 |
 | LLM 调用 | 指数退避重试（3 次） | + 多模型 fallback + 熔断器 |
 | Token 统计 | 区分 input/output tokens | + 精确计费 |
-| Agent 执行 | ReAct loop（思考→行动→观察） | + 并行工具调用 |
+| Agent 执行 | 能力流水线或 ReAct loop | + 并行工具调用 |
 | Injection 检测 | 正则 + Base64/Unicode/Leetspeak 解码 | + ML 分类器 |
 | 日志格式 | LOG_FORMAT=console\|json | + ELK 采集 |
 | Trace 存储 | 内存 FIFO 1000 条 | + OpenTelemetry |

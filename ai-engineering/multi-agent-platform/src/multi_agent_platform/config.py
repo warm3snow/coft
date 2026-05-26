@@ -1,8 +1,13 @@
 """Configuration management for the multi-agent platform."""
 
 from typing import Optional
-from pydantic_settings import BaseSettings
-from pydantic import Field
+
+from pydantic import BaseModel, Field
+
+try:
+    from pydantic_settings import BaseSettings
+except ImportError:  # pragma: no cover - fallback for minimal test environments
+    BaseSettings = BaseModel
 
 
 class LLMConfig(BaseSettings):

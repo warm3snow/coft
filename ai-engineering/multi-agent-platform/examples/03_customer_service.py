@@ -320,16 +320,11 @@ def setup_customer_service():
     tool_reg.register(escalate_to_human, roles=["refund_agent", "faq_agent"])
 
     # 4. Register application agents
-    # Triage: uses StructuredTriageAgent for deterministic routing
-    agent_reg.register(
-        role="triage_agent", system_prompt=TRIAGE_PROMPT,
-        description="客服意图分流",
-    )
     triage = StructuredTriageAgent(
         llm=llm, categories=["ORDER_STATUS", "REFUND", "FAQ"],
         system_prompt=TRIAGE_PROMPT,
     )
-    agent_reg._instances["triage_agent"] = triage
+    agent_reg.register_instance("triage_agent", triage, description="客服意图分流")
 
     # Specialist agents: use GenericAgent (default)
     agent_reg.register(
