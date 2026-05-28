@@ -63,6 +63,16 @@ description: Use when reviewing a repository for application and data security f
 7. 不能确认的项转入 `manual_review`。
 8. 按模板输出报告。
 
+## Quick Reference
+
+| 场景 | 默认动作 |
+|---|---|
+| 看到明文密钥、私钥、关闭证书校验 | 直接按规则定性 |
+| 只看到局部代码、单个字符串、间接线索 | 优先 `manual_review` |
+| 同一问题在多个文件重复出现 | 合并成一个 Finding |
+| 只有最佳实践偏差 | 记录为低到中风险，不直接写成不通过 |
+| 未看到相关实现 | 写明审阅范围，不写“已满足” |
+
 ## Review Checklist
 
 在结束前逐项确认：
@@ -73,6 +83,15 @@ description: Use when reviewing a repository for application and data security f
 - [ ] 证据不足项都被标记为 `manual_review`。
 - [ ] 报告区分了事实、判断、建议。
 - [ ] 报告明确说明结论仅基于仓库静态内容。
+
+## Common Failures
+
+- 先下结论，再回头找证据。
+- 把“没看到”写成“没有”。
+- 把间接线索写成已确认问题。
+- 把最佳实践偏差写成合规失败。
+- 高风险问题没有明确证据位置。
+- 报告缺少人工复核区或附录区。
 
 ## Supporting Files
 

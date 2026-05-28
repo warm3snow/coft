@@ -16,6 +16,13 @@
 - `output-template.md`：Findings 和报告模板
 - `examples.md`：示例提示词、示例 Findings、常见误用
 
+## 使用要点
+
+- 先看 `SKILL.md` 的硬约束和执行顺序。
+- 再看 `standards.md` 的判定口径。
+- 输出前按 `output-template.md` 自查。
+- 输出风格拿不准时，用 `examples.md` 对照。
+
 ## 设计原则
 
 - Skill 只定义标准，不实现执行器。
