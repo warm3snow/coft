@@ -1,6 +1,6 @@
 ---
 name: guomi-app-data-security
-description: Use when a task mentions 密评, 项目密评, 商业密码评测, 商用密码评估, 国密检查, encryption, authentication, transport security, or guomi adaptation, and you need evidence-backed findings with manual-review fallback
+description: Use when a task mentions 密评, 项目密评, 商业密码评测, 商用密码评估, 应用安全密评, 数据安全密评, 国密检查, 国密改造, encryption, authentication, transport security, or guomi adaptation, and you need evidence-backed findings with manual-review fallback
 ---
 
 # 应用和数据安全密评
@@ -32,6 +32,8 @@ description: Use when a task mentions 密评, 项目密评, 商业密码评测, 
 - 不得把最佳实践偏差直接写成“密评不通过”，除非 `standards.md` 已明确给出该结论口径。
 - 证据不足时，必须输出 `manual_review`。
 - 所有高风险结论都必须附带文件路径、位置和判断依据。
+- 如果任务要求“生成报告”，必须实际创建报告文件，不能只在对话里给出文本。
+- 报告生成默认同时创建 Markdown 和 HTML 两个文件。
 </HARD-GATE>
 
 ## When to Use
@@ -39,6 +41,7 @@ description: Use when a task mentions 密评, 项目密评, 商业密码评测, 
 在以下情况使用：
 
 - 用户提到“密评”“项目密评”“商业密码评测”“商用密码评估”“国密检查”。
+- 用户提到“应用安全密评”“数据安全密评”“国密改造”。
 - 需要对仓库做“应用和数据安全”方向审阅。
 - 需要围绕数据加密、鉴权与访问控制、通信安全、国密适配线索给出结论。
 - 需要输出证据化 Findings。
@@ -63,6 +66,7 @@ description: Use when a task mentions 密评, 项目密评, 商业密码评测, 
 6. 先写证据，再写结论。
 7. 不能确认的项转入 `manual_review`。
 8. 按模板输出报告。
+9. 如果任务要求生成报告，使用 `apply_patch` 或其他文件编辑方式把报告写入仓库或用户指定位置。
 
 ## Quick Reference
 
@@ -84,6 +88,7 @@ description: Use when a task mentions 密评, 项目密评, 商业密码评测, 
 - [ ] 证据不足项都被标记为 `manual_review`。
 - [ ] 报告区分了事实、判断、建议。
 - [ ] 报告明确说明结论仅基于仓库静态内容。
+- [ ] 如果要求生成报告，`.md` 和 `.html` 文件都已实际落盘。
 
 ## Common Failures
 
@@ -93,6 +98,7 @@ description: Use when a task mentions 密评, 项目密评, 商业密码评测, 
 - 把最佳实践偏差写成合规失败。
 - 高风险问题没有明确证据位置。
 - 报告缺少人工复核区或附录区。
+- 用户要求生成报告，但只在回复消息里输出，没有创建文件。
 
 ## Supporting Files
 
@@ -118,5 +124,6 @@ description: Use when a task mentions 密评, 项目密评, 商业密码评测, 
 
 1. 证据是否真的在已查看文件中出现。
 2. 结论是否真的符合 `standards.md` 的口径。
+3. 如果任务要求生成报告，Markdown 和 HTML 文件是否已经创建。
 
 任一答案为“否”，就不要定性，转入 `manual_review`。
