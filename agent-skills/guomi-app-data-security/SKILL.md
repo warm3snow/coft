@@ -1,6 +1,6 @@
 ---
 name: guomi-app-data-security
-description: Use when reviewing a repository for application and data security findings, especially encryption, authentication, transport security, or guomi adaptation, and you need evidence-backed findings with manual-review fallback
+description: Use when a task mentions 密评, 项目密评, 商业密码评测, 商用密码评估, 国密检查, encryption, authentication, transport security, or guomi adaptation, and you need evidence-backed findings with manual-review fallback
 ---
 
 # 应用和数据安全密评
@@ -38,6 +38,7 @@ description: Use when reviewing a repository for application and data security f
 
 在以下情况使用：
 
+- 用户提到“密评”“项目密评”“商业密码评测”“商用密码评估”“国密检查”。
 - 需要对仓库做“应用和数据安全”方向审阅。
 - 需要围绕数据加密、鉴权与访问控制、通信安全、国密适配线索给出结论。
 - 需要输出证据化 Findings。
