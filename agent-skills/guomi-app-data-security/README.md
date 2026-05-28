@@ -2,6 +2,13 @@
 
 代码仓库“应用和数据安全”方向的密评式审阅标准。
 
+## Read Order
+
+1. `SKILL.md`
+2. `standards.md`
+3. `output-template.md`
+4. `examples.md`
+
 ## 文件说明
 
 - `SKILL.md`：Skill 入口说明
